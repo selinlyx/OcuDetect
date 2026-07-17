@@ -121,7 +121,7 @@ def evaluate(model, dataloader, device, criterion, threshold=0.5):
 
 def train(model, train_loader, val_loader, device, num_epochs=NUM_EPOCHS, 
           batch_size=BATCH_SIZE, learning_rate=LR, results_dir=RESULTS_DIR,
-          checkpoint_dir=CHECKPOINT_DIR, threshold=0.5):
+          checkpoint_dir=CHECKPOINT_DIR, threshold=0.5, unfreeze_epoch=5):
 
     model = model.to(device)
 
@@ -142,7 +142,20 @@ def train(model, train_loader, val_loader, device, num_epochs=NUM_EPOCHS,
 
     # training loops 
     for epoch in range(num_epochs):
-        
+        if epoch == unfreeze_epoch:
+           
+            print(f"UNFREEZING BACKBONE at epoch {epoch+1}")
+            
+            # unfreeze backbone
+            for param in model.backbone.parameters():
+                param.requires_grad = True
+            
+            # lower LR for backbone, higher for classifier
+            optimizer = torch.optim.Adam([
+                {'params': model.backbone.parameters(), 'lr': learning_rate / 10},
+                {'params': model.classifier.parameters(), 'lr': learning_rate}
+            ])
+
         model.train()
 
         # to accumulate error and loss 
@@ -181,10 +194,10 @@ def train(model, train_loader, val_loader, device, num_epochs=NUM_EPOCHS,
 
             torch.save(model.state_dict(), os.path.join(checkpoint_dir, f'{model.name}_current_best_model.pt'))
     
-    np.savetxt(os.path.join(results_dir, 'train_err.csv'), train_err)
-    np.savetxt(os.path.join(results_dir, 'train_loss.csv'), train_loss)
-    np.savetxt(os.path.join(results_dir, 'val_err.csv'), val_err)
-    np.savetxt(os.path.join(results_dir, 'val_loss.csv'), val_loss)
+    np.savetxt(os.path.join(results_dir, f'{model.name}_epochs{best_epoch}_bs{batch_size}_lr{learning_rate}_train_err.csv'), train_err)
+    np.savetxt(os.path.join(results_dir, f'{model.name}_epochs{best_epoch}_bs{batch_size}_lr{learning_rate}_train_loss.csv'), train_loss)
+    np.savetxt(os.path.join(results_dir, f'{model.name}_epochs{best_epoch}_bs{batch_size}_lr{learning_rate}_val_err.csv'), val_err)
+    np.savetxt(os.path.join(results_dir, f'{model.name}_epochs{best_epoch}_bs{batch_size}_lr{learning_rate}_val_loss.csv'), val_loss)
     
     best_path = os.path.join(checkpoint_dir, f'{model.name}_current_best_model.pt')
     rename_path = os.path.join(checkpoint_dir, f'{model.name}_epochs{best_epoch}_bs{batch_size}_lr{learning_rate}.pt')
