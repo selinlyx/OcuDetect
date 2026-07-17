@@ -14,9 +14,10 @@ MODEL_CLASS = "BaselineModel"
 MODULE_PATH = "models.baseline" 
 CHECKPOINT_FILE = "Baseline_epochs19_bs32_lr0.001.pt"
 
+
 # MODEL_CLASS = "OcuDetect"
 # MODULE_PATH = "models.ocudetect_v1" 
-# CHECKPOINT_FILE = "OcuDetect_v1_epochs18_bs32_lr0.001.pt"
+# CHECKPOINT_FILE = "OcuDetect_v1_epochs16_bs32_lr0.001.pt"
 
 IMAGE_DIR = "ODIR-5K/data"
 TEST_CSV = "ODIR-5K/test_labels.csv"
@@ -219,28 +220,63 @@ def display_results(metrics, checkpoint_name, all_predictions, all_labels, all_p
 
     print(f"\nImage saved to: {RESULTS_DIR}/sample_prediction.png")
 
-def compute_and_plot_confusion_matrix(all_labels, all_preds, class_names, save_dir=RESULTS_DIR):
 
+def plot_training_curve(train_err, val_err, train_loss, val_loss, save_path, save_dir=RESULTS_DIR):
+
+    os.makedirs(save_dir, exist_ok=True)
+
+    plt.figure(figsize=(12, 4))
+
+    n = len(train_err)
+    epochs = range(1, n + 1)
+
+    # error vs epochs curve 
+    plt.subplot(1, 2, 1)
+    plt.plot(epochs, train_err, label="Train")
+    plt.plot(epochs, val_err, label="Validation")
+    plt.xlabel("Epoch")
+    plt.ylabel("Error")
+    plt.title("Train vs Validation Error")
+    plt.legend(loc='best')
+    plt.grid(True, alpha=0.3)
+    
+    # loss vs epochs curve
+    plt.subplot(1, 2, 2)
+    plt.plot(epochs, train_loss, label="Train")
+    plt.plot(epochs, val_loss, label="Validation")
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+    plt.title("Train vs Validation Loss")
+    plt.legend(loc='best')
+    plt.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    plt.savefig(os.path.join(save_dir, f'{save_path}.png'))
+    plt.show()
+    
+    print(f"Training curves saved to: {os.path.join(save_dir, f'{save_path}.png')}")
+
+def compute_and_plot_confusion_matrix(all_labels, all_preds, class_names, save_dir=RESULTS_DIR):
+    """
+    Compute and plot confusion matrices with compact cells and big text.
+    """
     os.makedirs(save_dir, exist_ok=True)
     
     n_classes = len(class_names)
     metrics_summary = {}
     
-    # plot confusion matrices for each disease class
-    fig, axes = plt.subplots(2, 4, figsize=(16, 8))
+    # ===== INDIVIDUAL CONFUSION MATRICES =====
+    fig, axes = plt.subplots(2, 4, figsize=(13, 6))  # Slightly wider for titles
     axes = axes.flatten()
     
     for i, name in enumerate(class_names):
-        # compute confusion matrix
         cm = confusion_matrix(all_labels[:, i], all_preds[:, i])
         tn, fp, fn, tp = cm.ravel()
         
-        # calculate metrics
         precision = tp / (tp + fp) if (tp + fp) > 0 else 0
         recall = tp / (tp + fn) if (tp + fn) > 0 else 0
         f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
         
-        # store metrics
         metrics_summary[name] = {
             'TP': int(tp), 'FP': int(fp), 'FN': int(fn), 'TN': int(tn),
             'precision': precision,
@@ -248,35 +284,50 @@ def compute_and_plot_confusion_matrix(all_labels, all_preds, class_names, save_d
             'f1': f1
         }
         
-        # plot
+        # Tight heatmap with big numbers
         sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=axes[i],
-                   xticklabels=['No', 'Yes'], yticklabels=['No', 'Yes'],
-                   cbar=False)
-        axes[i].set_title(f'{name}', fontsize=10, fontweight='bold')
-        axes[i].set_xlabel(f'Predicted\nP:{precision:.3f} R:{recall:.3f} F1:{f1:.3f}', fontsize=8)
-        axes[i].set_ylabel('True')
+                   xticklabels=['N', 'Y'], yticklabels=['N', 'Y'],
+                   cbar=False,
+                   annot_kws={'size': 22},
+                   square=True)
+        
+        # ===== BIGGER DISEASE NAME =====
+        axes[i].set_title(f'{name}', fontsize=14, fontweight='bold')  # ← 12 → 14
+        
+        # Big P/R labels
+        axes[i].set_xlabel(f'P:{precision:.2f} R:{recall:.2f}', fontsize=13)
+        axes[i].set_ylabel('True', fontsize=11)
+        axes[i].tick_params(labelsize=10)
+        
+        # Make numbers bold
+        for text in axes[i].texts:
+            text.set_fontsize(22)
+            text.set_fontweight('bold')
     
     plt.tight_layout()
     plt.savefig(os.path.join(save_dir, 'confusion_matrix_individual.png'), dpi=300, bbox_inches='tight')
     plt.show()
     
-    # plot overall confusion matrix
+    # ===== OVERALL CONFUSION MATRIX =====
     all_preds_flat = all_preds.ravel()
     all_labels_flat = all_labels.ravel()
     cm_overall = confusion_matrix(all_labels_flat, all_preds_flat)
     
-    fig, ax = plt.subplots(figsize=(8, 6))
+    fig, ax = plt.subplots(figsize=(5.5, 4.5))
     sns.heatmap(cm_overall, annot=True, fmt='d', cmap='Blues', ax=ax,
-                xticklabels=['No', 'Yes'], yticklabels=['No', 'Yes'])
-    ax.set_title('Overall Confusion Matrix (All Classes Combined)', fontsize=14, fontweight='bold')
-    ax.set_xlabel('Predicted')
-    ax.set_ylabel('True')
+                xticklabels=['No', 'Yes'], yticklabels=['No', 'Yes'],
+                annot_kws={'size': 22},
+                square=True)
+    ax.set_title('Overall Confusion Matrix', fontsize=14, fontweight='bold')  # ← Bigger
+    ax.set_xlabel('Predicted', fontsize=12)
+    ax.set_ylabel('True', fontsize=12)
+    ax.tick_params(labelsize=11)
     
     plt.tight_layout()
     plt.savefig(os.path.join(save_dir, 'confusion_matrix_overall.png'), dpi=300, bbox_inches='tight')
     plt.show()
     
-    # print summary table of confusion matrix metrics
+    # ===== PRINT SUMMARY TABLE =====
     print("\n" + "="*70)
     print("CONFUSION MATRIX SUMMARY")
     print("="*70)
@@ -288,6 +339,12 @@ def compute_and_plot_confusion_matrix(all_labels, all_preds, class_names, save_d
               f"{m['precision']:.4f}  {m['recall']:.4f}  {m['f1']:.4f}")
     
     print("-"*95)
+    
+    best_disease = max(metrics_summary.items(), key=lambda x: x[1]['f1'])
+    worst_disease = min(metrics_summary.items(), key=lambda x: x[1]['f1'])
+    
+    print(f"\n✅ Best: {best_disease[0]} (F1: {best_disease[1]['f1']:.4f})")
+    print(f"❌ Worst: {worst_disease[0]} (F1: {worst_disease[1]['f1']:.4f})")
     
     return metrics_summary
 
