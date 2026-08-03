@@ -192,12 +192,18 @@ def train(model, train_loader, val_loader, device, num_epochs=NUM_EPOCHS,
             best_val_err = val_err[epoch]
             best_epoch = epoch + 1
 
-            torch.save(model.state_dict(), os.path.join(checkpoint_dir, f'{model.name}_current_best_model.pt'))
+            # torch.save(model.state_dict(), os.path.join(checkpoint_dir, f'{model.name}_current_best_model.pt'))
+            torch.save(model.state_dict(), os.path.join('scratch/huan4397/OcuDetect/checkpoints', f'{model.name}_current_best_model.pt'))
+
     
-    np.savetxt(os.path.join(results_dir, f'{model.name}_epochs{best_epoch}_bs{batch_size}_lr{learning_rate}_train_err.csv'), train_err)
-    np.savetxt(os.path.join(results_dir, f'{model.name}_epochs{best_epoch}_bs{batch_size}_lr{learning_rate}_train_loss.csv'), train_loss)
-    np.savetxt(os.path.join(results_dir, f'{model.name}_epochs{best_epoch}_bs{batch_size}_lr{learning_rate}_val_err.csv'), val_err)
-    np.savetxt(os.path.join(results_dir, f'{model.name}_epochs{best_epoch}_bs{batch_size}_lr{learning_rate}_val_loss.csv'), val_loss)
+    # np.savetxt(os.path.join(results_dir, f'{model.name}_epochs{best_epoch}_bs{batch_size}_lr{learning_rate}_train_err.csv'), train_err)
+    # np.savetxt(os.path.join(results_dir, f'{model.name}_epochs{best_epoch}_bs{batch_size}_lr{learning_rate}_train_loss.csv'), train_loss)
+    # np.savetxt(os.path.join(results_dir, f'{model.name}_epochs{best_epoch}_bs{batch_size}_lr{learning_rate}_val_err.csv'), val_err)
+    # np.savetxt(os.path.join(results_dir, f'{model.name}_epochs{best_epoch}_bs{batch_size}_lr{learning_rate}_val_loss.csv'), val_loss)
+    np.savetxt(os.path.join('scratch/huan4397/OcuDetect/results', f'{model.name}_epochs{best_epoch}_bs{batch_size}_lr{learning_rate}_train_err.csv'), train_err)
+    np.savetxt(os.path.join('scratch/huan4397/OcuDetect/results', f'{model.name}_epochs{best_epoch}_bs{batch_size}_lr{learning_rate}_train_loss.csv'), train_loss)
+    np.savetxt(os.path.join('scratch/huan4397/OcuDetect/results', f'{model.name}_epochs{best_epoch}_bs{batch_size}_lr{learning_rate}_val_err.csv'), val_err)
+    np.savetxt(os.path.join('scratch/huan4397/OcuDetect/results', f'{model.name}_epochs{best_epoch}_bs{batch_size}_lr{learning_rate}_val_loss.csv'), val_loss)
     
     best_path = os.path.join(checkpoint_dir, f'{model.name}_current_best_model.pt')
     rename_path = os.path.join(checkpoint_dir, f'{model.name}_epochs{best_epoch}_bs{batch_size}_lr{learning_rate}.pt')
