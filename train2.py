@@ -87,7 +87,8 @@ class OcularDataset(Dataset):
 def compute_sample_weights(df, label_columns):
 
     class_counts = df[label_columns].sum() # get the number of images per class
-    class_weights = 1.0 / class_counts.replace(0, 1) # inverse frequency per class
+    # class_weights = 1.0 / class_counts.replace(0, 1) # inverse frequency per class
+    class_weights = 1.0 / np.sqrt(class_counts.replace(0, 1)) # inverse square root
 
     # each sample's weight = max weight among its present labels (rarest-label-present rule)
     sample_weights = df[label_columns].apply(
