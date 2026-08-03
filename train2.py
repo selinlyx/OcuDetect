@@ -9,6 +9,7 @@ from torchvision import transforms
 from PIL import Image
 from models.baseline import BaselineModel
 import matplotlib.pyplot as plt
+from torch.utils.data import WeightedRandomSampler
 
 
 # config =========================================================
@@ -73,16 +74,33 @@ class OcularDataset(Dataset):
         
         return image, torch.tensor(labels, dtype=torch.float32)
 
+def compute_sample_weights(df, label_columns):
+
+    class_counts = df[label_columns].sum() # get the number of images per class
+    class_weights = 1.0 / class_counts.replace(0, 1) # inverse frequency per class
+
+    # each sample's weight = max weight among its present labels (rarest-label-present rule)
+    sample_weights = df[label_columns].apply(
+        lambda row: max(class_weights[col] for col in label_columns if row[col] == 1) 
+        if row[label_columns].sum() > 0 else class_weights.min(),
+        axis=1
+    )
+    return torch.DoubleTensor(sample_weights.values)
+
 
 def get_data_loader(train_csv, val_csv, test_csv, image_dir, batch_size=32, image_size=(224, 224)):
 
     # create datasets
-    train_dataset = OcularDataset(train_csv, image_dir, image_size)
-    val_dataset = OcularDataset(val_csv, image_dir, image_size)
-    test_dataset = OcularDataset(test_csv, image_dir, image_size)
-    
+    train_dataset = OcularDataset(train_csv, image_dir, image_size, train=True)
+    val_dataset = OcularDataset(val_csv, image_dir, image_size, train=False)
+    test_dataset = OcularDataset(test_csv, image_dir, image_size, train=False)
+
+    # define sampler
+    sample_weights = compute_sample_weights(train_dataset.df, train_dataset.label_columns)
+    sampler = WeightedRandomSampler(sample_weights, num_samples=len(sample_weights), replacement=True)
+
     # create dataloaders
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=0)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, sampler=sampler, num_workers=0)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
     
