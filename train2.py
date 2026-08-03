@@ -8,22 +8,32 @@ from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 from PIL import Image
 from models.baseline import BaselineModel
+from models.ocudetect_v1 import OcuDetect
 import matplotlib.pyplot as plt
 from torch.utils.data import WeightedRandomSampler
 
 
 # config =========================================================
-IMG_SIZE = 224 
+IMG_SIZE = 224
 BATCH_SIZE = 32
 NUM_EPOCHS = 20
 LR = 0.001
-IMAGE_DIR = "ODIR-5K/data" 
+IMAGE_DIR = "ODIR-5K/data"
 TRAIN_CSV = "ODIR-5K/train_labels.csv"
 VAL_CSV = "ODIR-5K/val_labels.csv"
 TEST_CSV = "ODIR-5K/test_labels.csv"
 CHECKPOINT_DIR = "checkpoints"
 RESULTS_DIR =  "results"
 RANDOM_SEED = 42
+
+# model selection: pick MODEL_NAME from MODEL_REGISTRY, pass extra
+# constructor args (besides num_classes/freeze_backbone) in MODEL_KWARGS
+MODEL_REGISTRY = {
+    "baseline": BaselineModel,
+    "ocudetect_v1": OcuDetect,
+}
+MODEL_NAME = "baseline"
+MODEL_KWARGS = {}
 # ================================================================
 
 class OcularDataset(Dataset):
@@ -292,7 +302,8 @@ def run_training():
         image_size=(IMG_SIZE, IMG_SIZE)
     )
 
-    model = BaselineModel(num_classes=8, freeze_backbone=True) # define model object
+    model_cls = MODEL_REGISTRY[MODEL_NAME]
+    model = model_cls(num_classes=8, freeze_backbone=True, **MODEL_KWARGS) # define model object
     
     total_params = sum(param.numel() for param in model.parameters())
     trainable_params = sum(param.numel() for param in model.parameters() if param.requires_grad)
