@@ -4,7 +4,7 @@ import torch.nn as nn
 import numpy as np
 import pandas as pd
 from torch.utils.data import Dataset, DataLoader
-# from sklearn.metrics import roc_auc_score, f1_score
+from sklearn.metrics import f1_score
 from torchvision import transforms
 from PIL import Image
 from models.baseline import BaselineModel
@@ -25,6 +25,8 @@ TEST_CSV = "ODIR-5K/test_labels.csv"
 CHECKPOINT_DIR = "checkpoints"
 RESULTS_DIR =  "results"
 RANDOM_SEED = 42
+CLASS_NAMES = ["Normal", "Diabetic Retinopathy", "Glaucoma", "Cataract", 
+               "AMD", "Hypertensive Retinopathy", "Pathological Myopia", "Other"]
 
 # model selection: pick MODEL_NAME from MODEL_REGISTRY, pass extra
 # constructor args (besides num_classes/freeze_backbone) in MODEL_KWARGS
@@ -98,6 +100,74 @@ def compute_sample_weights(df, label_columns):
     )
     return torch.DoubleTensor(sample_weights.values)
 
+def evaluate_threshold_tuning(model, dataloader, device):
+    model.eval()
+
+    all_probs = []
+    all_labels = []
+
+    with torch.no_grad():
+        for images, labels, in dataloader:
+            images, labels = images.to(device), labels.to(device)
+            outputs = model(images)
+
+            all_probs.append(outputs.cpu().numpy())
+            all_labels.append(labels.cpu().numpy())
+
+    all_probs = np.vstack(all_probs)
+    all_labels = np.vstack(all_labels)
+    
+    return all_probs, all_labels
+
+def tune_thresholds_grid(val_probs, val_labels, class_names, thresholds=np.arange(0.05, 0.96, 0.05)):
+    best_thresholds = {}
+    best_f1s = {}
+    
+    for i, name in enumerate(class_names):
+        best_f1 = -1
+        best_t = 0.5  # default threshold 0.5
+        
+        for t in thresholds:
+            preds = (val_probs[:, i] > t).astype(int)
+            f1 = f1_score(val_labels[:, i], preds, zero_division=0)
+            if f1 > best_f1:
+                best_f1 = f1
+                best_t = t
+        
+        best_thresholds[name] = float(best_t)
+        best_f1s[name] = float(best_f1)
+    
+    # print summary 
+    print("\n" + "="*50)
+    print("TUNED THRESHOLDS (on validation set)")
+    print("="*50)
+    for name in class_names:
+        print(f"  {name:<25} threshold={best_thresholds[name]:.2f}  (val F1={best_f1s[name]:.4f})")
+    
+    return best_thresholds
+
+def apply_thresholds(all_probabilities, class_names, thresholds_dict):
+    preds = np.zeros_like(all_probabilities, dtype=int)
+    for i, name in enumerate(class_names):
+        preds[:, i] = (all_probabilities[:, i] > thresholds_dict[name]).astype(int)
+    return preds
+
+def save_thresholds(thresholds, checkpoint_path, save_dir=RESULTS_DIR):
+    os.makedirs(save_dir, exist_ok=True)
+    base_name = os.path.splitext(os.path.basename(checkpoint_path))[0]
+    path = os.path.join(save_dir, f"{base_name}_thresholds.csv")
+
+    df = pd.DataFrame(list(thresholds.items()), columns=["Disease", "Threshold"])
+    df.to_csv(path, index=False)
+    print(f"Thresholds saved to: {path}")
+    return path
+
+def load_thresholds(checkpoint_path, save_dir=RESULTS_DIR):
+    base_name = os.path.splitext(os.path.basename(checkpoint_path))[0]
+    path = os.path.join(save_dir, f"{base_name}_thresholds.csv")
+
+    df = pd.read_csv(path)
+    return dict(zip(df["Disease"], df["Threshold"]))
 
 def get_data_loader(train_csv, val_csv, test_csv, image_dir, batch_size=32, image_size=(224, 224)):
 
@@ -244,7 +314,7 @@ def train(model, train_loader, val_loader, device, num_epochs=NUM_EPOCHS,
     os.rename(best_path, rename_path)
     print(f"Training is complete.")
 
-    return model, train_err, train_loss, val_err, val_loss
+    return model, train_err, train_loss, val_err, val_loss, rename_path
 
 
 def plot_training_curve(train_err, val_err, train_loss, val_loss, save_path, save_dir=RESULTS_DIR):
@@ -313,7 +383,7 @@ def run_training():
     print(f"  Trainable parameters: {trainable_params} ({trainable_params/total_params*100:.1f}%)")
     
     # train model 
-    model, train_err, train_loss, val_err, val_loss = train(
+    model, train_err, train_loss, val_err, val_loss, best_model_path = train(
         model=model,
         train_loader=train_loader,
         val_loader=val_loader,
@@ -336,6 +406,18 @@ def run_training():
         save_dir=RESULTS_DIR
     )
 
+    # threshold tuning
+    print("\n" + "="*60)
+    print("STARTING THRESHOLD TUNING")
+    print("="*60)
+
+    model.load_state_dict(torch.load(best_model_path))
+    model = model.to(device)
+
+    # get validation probabilities, tune thresholds
+    val_probs, val_labels = evaluate_threshold_tuning(model, val_loader, device)
+    thresholds = tune_thresholds_grid(val_probs, val_labels, CLASS_NAMES)
+    save_thresholds(thresholds, best_model_path, save_dir=RESULTS_DIR)
 
 if __name__ == "__main__":
     run_training()

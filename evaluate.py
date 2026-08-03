@@ -7,17 +7,28 @@ import seaborn as sns
 from torch.utils.data import DataLoader
 from sklearn.metrics import  precision_score, recall_score, f1_score, confusion_matrix
 import importlib
-from train import OcularDataset
+from train import OcularDataset, evaluate_threshold_tuning, apply_thresholds, load_thresholds
 import pandas as pd
 
-MODEL_CLASS = "BaselineModel"
-MODULE_PATH = "models.baseline" 
-CHECKPOINT_FILE = "Baseline_epochs19_bs32_lr0.001.pt"
+# # progress report baseline model checkpoint
+# MODEL_CLASS = "BaselineModel"
+# MODULE_PATH = "models.baseline" 
+# CHECKPOINT_FILE = "Baseline_epochs19_bs32_lr0.001.pt"
 
-
+# # progress report ocudetect model (v1) checkpoint
 # MODEL_CLASS = "OcuDetect"
 # MODULE_PATH = "models.ocudetect_v1" 
 # CHECKPOINT_FILE = "OcuDetect_v1_epochs16_bs32_lr0.001.pt"
+
+# # final report ocudetect model (v1) trained train2.py with more aumentation and weighted sampling
+# MODEL_CLASS = "OcuDetect"
+# MODULE_PATH = "models.ocudetect_v1" 
+# CHECKPOINT_FILE = "OcuDetect_v1_epochs20_bs32_lr0.001.pt"
+
+# final report ocudetect model (v1) trained train2.py with more aumentation and inverse sqrt weighted sampling
+MODEL_CLASS = "OcuDetect"
+MODULE_PATH = "models.ocudetect_v1" 
+CHECKPOINT_FILE = "OcuDetect_v1_epochs17_bs32_lr0.001.pt"
 
 IMAGE_DIR = "ODIR-5K/data"
 TEST_CSV = "ODIR-5K/test_labels.csv"
@@ -82,6 +93,34 @@ def evaluate_model(model, test_loader, device, threshold):
         'loss': loss,
     }
     
+    return metrics, all_predictions, all_labels, all_probabilities
+
+def evaluate_model_with_thresholds(model, test_loader, device, thresholds_dict, class_names):
+    model.eval()
+    all_labels, all_probabilities = [], []
+    total_loss, total_samples = 0.0, 0
+    criterion = nn.BCELoss()
+
+    with torch.no_grad():
+        for images, labels in test_loader:
+            images, labels = images.to(device), labels.to(device)
+            outputs = model(images)
+
+            loss = criterion(outputs, labels)
+            total_loss += loss.item() * len(labels)
+            total_samples += labels.numel()
+
+            all_labels.extend(labels.cpu().numpy())
+            all_probabilities.extend(outputs.cpu().numpy())
+
+    all_labels = np.array(all_labels)
+    all_probabilities = np.array(all_probabilities)
+
+    all_predictions = apply_thresholds(all_probabilities, class_names, thresholds_dict)
+    error = (all_predictions != all_labels).sum() / all_labels.size
+    loss = total_loss / total_samples
+
+    metrics = {'error': error, 'loss': loss}
     return metrics, all_predictions, all_labels, all_probabilities
 
 def print_per_class_metrics(all_labels, all_preds, class_names):
@@ -360,10 +399,14 @@ def run_evaluate():
     # load model
     model = load_checkpoint(CHECKPOINT_FILE, MODEL_CLASS, MODULE_PATH)
     model = model.to(device)
+
+    # load thresholds tuned in train.py
+    thresholds = load_thresholds(CHECKPOINT_FILE, save_dir="results")
     
     # evaluate
-    metrics, all_preds, all_labels, all_probs = evaluate_model(model, test_loader, device, THRESHOLD)
-    
+    # metrics, all_preds, all_labels, all_probs = evaluate_model(model, test_loader, device, THRESHOLD)
+    metrics, all_preds, all_labels, all_probs = evaluate_model_with_thresholds(model, test_loader, device, thresholds, CLASS_NAMES)
+
     # display confusion matrix metrics
     compute_and_plot_confusion_matrix(all_labels, all_preds, CLASS_NAMES, RESULTS_DIR)
 
