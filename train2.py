@@ -24,6 +24,7 @@ VAL_CSV = "ODIR-5K/val_labels.csv"
 TEST_CSV = "ODIR-5K/test_labels.csv"
 CHECKPOINT_DIR = "checkpoints"
 RESULTS_DIR =  "results"
+WEIGHT_DECAY = 1e-4
 RANDOM_SEED = 42
 CLASS_NAMES = ["Normal", "Diabetic Retinopathy", "Glaucoma", "Cataract", 
                "AMD", "Hypertensive Retinopathy", "Pathological Myopia", "Other"]
@@ -230,7 +231,7 @@ def evaluate(model, dataloader, device, criterion, threshold=0.5):
 
 
 def train(model, train_loader, val_loader, device, num_epochs=NUM_EPOCHS, 
-          batch_size=BATCH_SIZE, learning_rate=LR, results_dir=RESULTS_DIR,
+          batch_size=BATCH_SIZE, learning_rate=LR, weight_decay=WEIGHT_DECAY, results_dir=RESULTS_DIR,
           checkpoint_dir=CHECKPOINT_DIR, threshold=0.5, unfreeze_epoch=5):
 
     model = model.to(device)
@@ -239,7 +240,7 @@ def train(model, train_loader, val_loader, device, num_epochs=NUM_EPOCHS,
     os.makedirs(checkpoint_dir, exist_ok=True) # make save directory if not already existing
 
     criterion = nn.BCELoss() # define loss function
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate) # define optimizer
+    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay) # define optimizer
     
     # define arrays to store train and validation loss and error
     train_err = np.zeros(num_epochs)
@@ -261,10 +262,10 @@ def train(model, train_loader, val_loader, device, num_epochs=NUM_EPOCHS,
                 param.requires_grad = True
             
             # lower LR for backbone, higher for classifier
-            optimizer = torch.optim.Adam([
+            optimizer = torch.optim.AdamW([
                 {'params': model.backbone.parameters(), 'lr': learning_rate / 10},
                 {'params': model.classifier.parameters(), 'lr': learning_rate}
-            ])
+            ], weight_decay=weight_decay)
 
         model.train()
 
@@ -391,6 +392,7 @@ def run_training():
         num_epochs=NUM_EPOCHS,
         batch_size=BATCH_SIZE,
         learning_rate=LR,
+        weight_decay=WEIGHT_DECAY,
         results_dir=RESULTS_DIR,
         checkpoint_dir=CHECKPOINT_DIR,
         threshold=0.5
