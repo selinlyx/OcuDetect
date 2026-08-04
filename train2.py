@@ -28,6 +28,7 @@ WEIGHT_DECAY = 1e-4
 RANDOM_SEED = 42
 CLASS_NAMES = ["Normal", "Diabetic Retinopathy", "Glaucoma", "Cataract", 
                "AMD", "Hypertensive Retinopathy", "Pathological Myopia", "Other"]
+LABEL_COLUMNS = ["N", "D", "G", "C", "A", "H", "M", "O"]
 
 # model selection: pick MODEL_NAME from MODEL_REGISTRY, pass extra
 # constructor args (besides num_classes/freeze_backbone) in MODEL_KWARGS
@@ -87,6 +88,17 @@ class OcularDataset(Dataset):
         
         return image, torch.tensor(labels, dtype=torch.float32)
 
+class WeightedBCELoss(nn.Module):
+    def __init__(self, class_weights):
+        super().__init__()
+        self.class_weights = class_weights
+    
+    def forward(self, outputs, labels):
+        self.class_weights = self.class_weights.to(outputs.device)
+        loss = nn.functional.binary_cross_entropy(outputs, labels, reduction='none')
+        weighted_loss = loss * self.class_weights.unsqueeze(0)
+        return weighted_loss.mean()
+    
 def compute_sample_weights(df, label_columns):
 
     class_counts = df[label_columns].sum() # get the number of images per class
@@ -100,6 +112,17 @@ def compute_sample_weights(df, label_columns):
         axis=1
     )
     return torch.DoubleTensor(sample_weights.values)
+
+def compute_class_weights(train_csv, label_columns=LABEL_COLUMNS):
+    df = pd.read_csv(train_csv)
+    counts = df[label_columns].sum().values  # positive count per class
+    n_total = len(df)
+    num_classes = len(label_columns)
+    
+    # inverse frequency weighting
+    weights = n_total / (num_classes * counts)
+    
+    return torch.tensor(weights, dtype=torch.float32)
 
 def evaluate_threshold_tuning(model, dataloader, device):
     model.eval()
@@ -246,7 +269,8 @@ def train(model, train_loader, val_loader, device, num_epochs=NUM_EPOCHS,
     os.makedirs(results_dir, exist_ok=True) # make save directory if not already existing
     os.makedirs(checkpoint_dir, exist_ok=True) # make save directory if not already existing
 
-    criterion = nn.BCELoss() # define loss function
+    class_weights = compute_class_weights(TRAIN_CSV)
+    criterion = WeightedBCELoss(class_weights) # define loss function
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay) # define optimizer
     
     # define arrays to store train and validation loss, error, f1
