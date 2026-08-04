@@ -202,9 +202,8 @@ def evaluate(model, dataloader, device, criterion, threshold=0.5):
     total_err = 0 # sum error
     total_samples = 0 # sum samples
     
-    # all_probabilites = [] # to compute AUC
-    # all_predictions = []
-    # all_labels = []
+    all_probs = [] 
+    all_labels = []
 
     with torch.no_grad(): # no updating weights in eval
         for images, labels in dataloader:
@@ -221,13 +220,21 @@ def evaluate(model, dataloader, device, criterion, threshold=0.5):
             total_err += (predictions != labels).float().sum().item()
             total_samples += labels.numel() # count total samples
 
+            all_probs.append(outputs.cpu().numpy())
+            all_labels.append(labels.cpu().numpy())
+
     # compute average error over total samples
     err = float(total_err) / total_samples
 
     # compute average loss over batches
     loss = total_loss / total_samples
-    
-    return {'error': err, 'loss': loss}
+
+    all_probs = np.vstack(all_probs)
+    all_labels = np.vstack(all_labels)
+    all_preds = (all_probs > threshold).astype(int)
+    macro_f1 = f1_score(all_labels, all_preds, average='macro', zero_division=0)
+
+    return {'error': err, 'loss': loss, 'f1': macro_f1}
 
 
 def train(model, train_loader, val_loader, device, num_epochs=NUM_EPOCHS, 
@@ -242,11 +249,13 @@ def train(model, train_loader, val_loader, device, num_epochs=NUM_EPOCHS,
     criterion = nn.BCELoss() # define loss function
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay) # define optimizer
     
-    # define arrays to store train and validation loss and error
+    # define arrays to store train and validation loss, error, f1
     train_err = np.zeros(num_epochs)
     train_loss = np.zeros(num_epochs)
+    train_f1 = np.zeros(num_epochs)
     val_err = np.zeros(num_epochs) 
     val_loss = np.zeros(num_epochs)
+    val_f1 = np.zeros(num_epochs)
     
     best_val_err = float('inf') # to track best model based on error
     best_epoch = 0
@@ -273,6 +282,9 @@ def train(model, train_loader, val_loader, device, num_epochs=NUM_EPOCHS,
         total_train_err = 0.0
         total_train_loss = 0.0
         total_samples = 0
+
+        train_probs = []
+        train_labels = []
         
         for i, data in enumerate(train_loader, 0):
             images, labels = data
@@ -288,16 +300,24 @@ def train(model, train_loader, val_loader, device, num_epochs=NUM_EPOCHS,
             total_train_err += (predictions != labels).float().sum().item()
             total_train_loss += loss.item() * len(labels)
             total_samples += labels.numel()
+
+            train_probs.append(outputs.detach().cpu().numpy())
+            train_labels.append(labels.cpu().numpy())
         
         train_err[epoch] = float(total_train_err) / total_samples 
         train_loss[epoch] = float(total_train_loss) / total_samples
-        
+        train_probs = np.vstack(train_probs)
+        train_labels = np.vstack(train_labels)
+        train_preds = (train_probs > threshold).astype(int)
+        train_f1[epoch] = f1_score(train_labels, train_preds, average='macro', zero_division=0)
+
         val_metrics = evaluate(model, val_loader, device, criterion)
         val_err[epoch] = val_metrics['error']
         val_loss[epoch] = val_metrics['loss']
-        
-        print(f"Epoch {epoch+1}: Train err: {train_err[epoch]:.4f}, Train loss: {train_loss[epoch]:.4f} |")
-        print(f"  Validation err: {val_err[epoch]:.4f}, Validation loss: {val_loss[epoch]:.4f}")
+        val_f1[epoch] = val_metrics['f1']
+
+        print(f"Epoch {epoch+1}: Train err: {train_err[epoch]:.4f}, Train loss: {train_loss[epoch]:.4f}, Train F1: {train_f1[epoch]:.4f} |")
+        print(f"  Validation err: {val_err[epoch]:.4f}, Validation loss: {val_loss[epoch]:.4f}, Validation F1: {val_f1[epoch]:.4f}")
 
         if val_err[epoch] < best_val_err:
             best_val_err = val_err[epoch]
@@ -309,26 +329,28 @@ def train(model, train_loader, val_loader, device, num_epochs=NUM_EPOCHS,
     np.savetxt(os.path.join(results_dir, f'{model.name}_epochs{best_epoch}_bs{batch_size}_lr{learning_rate}_train_loss.csv'), train_loss)
     np.savetxt(os.path.join(results_dir, f'{model.name}_epochs{best_epoch}_bs{batch_size}_lr{learning_rate}_val_err.csv'), val_err)
     np.savetxt(os.path.join(results_dir, f'{model.name}_epochs{best_epoch}_bs{batch_size}_lr{learning_rate}_val_loss.csv'), val_loss)
-    
+    np.savetxt(os.path.join(results_dir, f'{model.name}_epochs{best_epoch}_bs{batch_size}_lr{learning_rate}_train_f1.csv'), train_f1)
+    np.savetxt(os.path.join(results_dir, f'{model.name}_epochs{best_epoch}_bs{batch_size}_lr{learning_rate}_val_f1.csv'), val_f1)
+
     best_path = os.path.join(checkpoint_dir, f'{model.name}_current_best_model.pt')
     rename_path = os.path.join(checkpoint_dir, f'{model.name}_epochs{best_epoch}_bs{batch_size}_lr{learning_rate}.pt')
     os.rename(best_path, rename_path)
     print(f"Training is complete.")
 
-    return model, train_err, train_loss, val_err, val_loss, rename_path
+    return model, train_err, train_loss, train_f1, val_err, val_loss, val_f1, rename_path
 
 
-def plot_training_curve(train_err, val_err, train_loss, val_loss, save_path, save_dir=RESULTS_DIR):
+def plot_training_curve(train_err, val_err, train_loss, val_loss, train_f1, val_f1, save_path, save_dir=RESULTS_DIR):
 
     os.makedirs(save_dir, exist_ok=True)
 
-    plt.figure(figsize=(12, 4))
+    plt.figure(figsize=(16, 4))
 
     n = len(train_err)
     epochs = range(1, n + 1)
 
     # error vs epochs curve 
-    plt.subplot(1, 2, 1)
+    plt.subplot(1, 3, 1)
     plt.plot(epochs, train_err, label="Train")
     plt.plot(epochs, val_err, label="Validation")
     plt.xlabel("Epoch")
@@ -338,7 +360,7 @@ def plot_training_curve(train_err, val_err, train_loss, val_loss, save_path, sav
     plt.grid(True, alpha=0.3)
     
     # loss vs epochs curve
-    plt.subplot(1, 2, 2)
+    plt.subplot(1, 3, 2)
     plt.plot(epochs, train_loss, label="Train")
     plt.plot(epochs, val_loss, label="Validation")
     plt.xlabel("Epoch")
@@ -346,7 +368,17 @@ def plot_training_curve(train_err, val_err, train_loss, val_loss, save_path, sav
     plt.title("Train vs Validation Loss")
     plt.legend(loc='best')
     plt.grid(True, alpha=0.3)
-    
+
+    # f1 vs epochs curve
+    plt.subplot(1, 3, 3)
+    plt.plot(epochs, train_f1, label="Train")
+    plt.plot(epochs, val_f1, label="Validation")
+    plt.xlabel("Epoch")
+    plt.ylabel("Macro F1")
+    plt.title("Train vs Validation Macro F1")
+    plt.legend(loc='best')
+    plt.grid(True, alpha=0.3)
+
     plt.tight_layout()
     plt.savefig(os.path.join(save_dir, f'{save_path}.png'))
     plt.show()
@@ -384,7 +416,7 @@ def run_training():
     print(f"  Trainable parameters: {trainable_params} ({trainable_params/total_params*100:.1f}%)")
     
     # train model 
-    model, train_err, train_loss, val_err, val_loss, best_model_path = train(
+    model, train_err, train_loss, train_f1, val_err, val_loss, val_f1, best_model_path = train(
         model=model,
         train_loader=train_loader,
         val_loader=val_loader,
@@ -404,6 +436,8 @@ def run_training():
         val_err=val_err,
         train_loss=train_loss,
         val_loss=val_loss,
+        train_f1=train_f1,
+        val_f1=val_f1,
         save_path=f"{model.name}_bs{BATCH_SIZE}_lr{LR}_training_curves",
         save_dir=RESULTS_DIR
     )
