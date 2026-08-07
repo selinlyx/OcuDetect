@@ -19,7 +19,7 @@ from models.ocudetect_v2 import OcuDetect2
 # CONFIG - for hyperparameter tuning and ablation study
 # =====================================================================
 CONFIG = {
-    "run_name": "model_parameters", 
+    "run_name": "model_parameters",
 
     # --- hyperparameters ---
     "num_epochs": 40,
@@ -32,22 +32,17 @@ CONFIG = {
     "unfreeze_epoch": 5,                # epoch to unfreeze, when freeze_backbone_entirely=False,
     "unfreeze_last_n_blocks": None,     # None = unfreeze the whole backbone
                                         # n = last n blocks of backbone to unfreeze
-    "weight_decay": 0.0,                
-    "use_scheduler": False,      
+    "use_scheduler": False,
     "use_augmentation": True,
-    "use_class_weighted_loss": False,  
-    "use_weighted_sampler": False, 
-    "use_focal_loss": False,      
-    "focal_gamma": 2.0,          
-    "label_smoothing": 0.1,  
+    "use_weighted_sampler": False,
 
     # --- architecture toggles ---
     "model_name": "ocudetect_v2",  # "baseline", "ocudetect_v1", "ocudetect_v2"
-    "attn_dim": 64,    
+    "attn_dim": 64,
     "dropout_rate": 0.5,
-    "use_attention": True,    
+    "use_attention": True,
 
-    # --- fixed paths (shouldn't need to change) ---
+    # --- fixed input and output paths  ---
     "image_dir": "ODIR-5K/data",
     "train_csv": "ODIR-5K/train_labels.csv",
     "val_csv": "ODIR-5K/val_labels.csv",
@@ -68,7 +63,6 @@ MODEL_REGISTRY = {
     "ocudetect_v2": OcuDetect2
 }
 
-
 class OcularDataset(Dataset):
     def __init__(self, data_csv, image_dir, image_size=(224, 224), train=False, use_augmentation=False):
 
@@ -77,10 +71,7 @@ class OcularDataset(Dataset):
         self.image_size = image_size
         self.label_columns = LABEL_COLUMNS
 
-        # augmentation is now a config toggle: train=True + use_augmentation=False
-        # gives you plain resize/normalize on the train split (row0 behaviour),
-        # train=True + use_augmentation=True gives you the full augmentation
-        # pipeline (row4 behaviour). Val/test never get augmented either way.
+        # add augmentations
         if train and use_augmentation:
             self.transform = transforms.Compose([
                 transforms.RandomHorizontalFlip(p=0.5),
@@ -112,96 +103,6 @@ class OcularDataset(Dataset):
         return image, torch.tensor(labels, dtype=torch.float32)
 
 
-class WeightedBCELoss(nn.Module):
-    def __init__(self, class_weights):
-        super().__init__()
-        self.class_weights = class_weights
-
-    def forward(self, outputs, labels):
-        self.class_weights = self.class_weights.to(outputs.device)
-        loss = nn.functional.binary_cross_entropy(outputs, labels, reduction='none')
-        weighted_loss = loss * self.class_weights.unsqueeze(0)
-        return weighted_loss.mean()
-
-
-class FocalLoss(nn.Module):
-    '''
-    Focal loss for multi-label classification (Lin et al., 2017), adapted
-    for a sigmoid+BCE multi-label setup.
-
-    Unlike WeightedBCELoss (which upweights rare CLASSES uniformly, regardless
-    of whether the model already gets them right), focal loss downweights
-    EASY, already-correct predictions and concentrates gradient on HARD,
-    currently-wrong ones -- for each individual prediction, not just each class.
-    This can help more than class weighting alone when misclassifications are
-    concentrated on specific hard examples rather than spread evenly within
-    a class.
-
-    alpha: optional per-class weight tensor (same shape as WeightedBCELoss's
-           class_weights). Pass this in if you want focal loss AND class
-           balancing at the same time. Leave as None to test focal loss on
-           its own, with no class weighting.
-    gamma: focusing parameter. gamma=0 reduces focal loss to plain BCE.
-           Typical values are 1-5; 2.0 is the standard default from the paper.
-    '''
-    def __init__(self, alpha=None, gamma=2.0):
-        super().__init__()
-        self.alpha = alpha
-        self.gamma = gamma
-
-    def forward(self, outputs, labels):
-        # standard BCE per-element, not yet reduced
-        bce = nn.functional.binary_cross_entropy(outputs, labels, reduction='none')
-
-        # pt = model's estimated probability of the TRUE class for each
-        # element (close to 1 when the model is already confidently correct,
-        # close to 0 when it's confidently wrong)
-        pt = torch.exp(-bce)
-
-        # (1 - pt)^gamma shrinks the loss contribution of easy/correct
-        # elements (pt near 1) much faster than hard/wrong ones (pt near 0)
-        focal = (1 - pt) ** self.gamma * bce
-
-        if self.alpha is not None:
-            alpha = self.alpha.to(outputs.device)
-            focal = focal * alpha.unsqueeze(0)
-
-        return focal.mean()
-
-
-class LabelSmoothingWrapper(nn.Module):
-    '''
-    Wraps ANY of the three loss functions above (plain BCE, WeightedBCELoss,
-    or FocalLoss) and softens the hard 0/1 targets before the wrapped loss
-    sees them:
-        label 1 -> (1 - smoothing)
-        label 0 -> smoothing
-    e.g. smoothing=0.1 turns a "1" target into 0.9 and a "0" target into 0.1.
-
-    Why: BCE (in any of its three variants) pushes the model to drive its
-    output probability all the way to the hard target. Over many epochs this
-    can make the model increasingly overconfident (outputs pushed toward 0
-    or 1) even on samples it's not actually more correct on -- this shows up
-    as val LOSS climbing while val ERROR stays flat, since loss is sensitive
-    to confidence/calibration but error only cares which side of the
-    threshold the prediction landed on. Smoothing the targets caps how
-    extreme the model is rewarded for being, directly countering that
-    specific failure mode.
-
-    smoothing=0.0 (the default) makes this an exact no-op passthrough to the
-    wrapped criterion -- identical behaviour to not using this wrapper at all.
-    '''
-    def __init__(self, base_criterion, smoothing=0.0):
-        super().__init__()
-        self.base_criterion = base_criterion
-        self.smoothing = smoothing
-
-    def forward(self, outputs, labels):
-        if self.smoothing > 0:
-            labels = labels * (1 - 2 * self.smoothing) + self.smoothing
-        return self.base_criterion(outputs, labels)
-
-
 def compute_sample_weights(df, label_columns):
     class_counts = df[label_columns].sum()
     class_weights = 1.0 / np.sqrt(class_counts.replace(0, 1))
@@ -212,15 +113,6 @@ def compute_sample_weights(df, label_columns):
         axis=1
     )
     return torch.DoubleTensor(sample_weights.values)
-
-
-def compute_class_weights(train_csv, label_columns=LABEL_COLUMNS):
-    df = pd.read_csv(train_csv)
-    counts = df[label_columns].sum().values
-    n_total = len(df)
-    num_classes = len(label_columns)
-    weights = n_total / (num_classes * counts)
-    return torch.tensor(weights, dtype=torch.float32)
 
 
 def evaluate_threshold_tuning(model, dataloader, device):
@@ -319,34 +211,10 @@ def evaluate(model, dataloader, device, criterion, threshold=0.5):
     return {'error': err, 'loss': loss, 'f1': macro_f1}
 
 
-def build_criterion(cfg):
-    # class_weights are computed the same way regardless of which loss uses
-    # them -- WeightedBCELoss uses them as a flat multiplier, FocalLoss uses
-    # them as its alpha term. Only computed if actually needed.
-    class_weights = compute_class_weights(cfg["train_csv"]) if cfg["use_class_weighted_loss"] else None
-
-    if cfg["use_focal_loss"]:
-        # focal loss, optionally combined with class weights as alpha
-        # (use_class_weighted_loss=True + use_focal_loss=True -> focal+weighted;
-        #  use_class_weighted_loss=False + use_focal_loss=True -> focal alone)
-        base_criterion = FocalLoss(alpha=class_weights, gamma=cfg["focal_gamma"])
-    elif cfg["use_class_weighted_loss"]:
-        base_criterion = WeightedBCELoss(class_weights)
-    else:
-        base_criterion = nn.BCELoss()
-
-    # label smoothing wraps whichever base criterion was picked above --
-    # cfg["label_smoothing"]=0.0 (default) makes this an exact no-op, so
-    # existing runs/configs are completely unaffected unless you explicitly
-    # set label_smoothing > 0.
-    return LabelSmoothingWrapper(base_criterion, smoothing=cfg["label_smoothing"])
-
-
 def build_optimizer(model, cfg, backbone_frozen):
     # while frozen, only classifier(+attention) params require grad anyway,
-    # so a single param group is fine. weight_decay=0.0 reproduces plain Adam
-    # with no decay if that's what the config row wants.
-    return torch.optim.AdamW(model.parameters(), lr=cfg["lr"], weight_decay=cfg["weight_decay"])
+    # so a single param group is fine.
+    return torch.optim.Adam(model.parameters(), lr=cfg["lr"])
 
 
 def unfreeze_backbone_params(model, cfg):
@@ -376,10 +244,7 @@ def unfreeze_backbone_params(model, cfg):
             param.requires_grad = True
         return list(model.backbone.parameters())
 
-    # partial unfreeze -- only works for the ocudetect_v1/EfficientNet-B0
-    # backbone shape (model.backbone.features is a Sequential). If you're
-    # running model_name="baseline" (ResNet-50), leave unfreeze_last_n_blocks
-    # as None -- ResNet-50's structure doesn't match this block layout.
+    # partial unfreeze
     blocks = list(model.backbone.features.children())
     n = min(n, len(blocks))
     blocks_to_unfreeze = blocks[-n:]
@@ -406,7 +271,7 @@ def build_unfreeze_optimizer(model, cfg, unfrozen_backbone_params=None):
     param_groups = [{'params': backbone_params, 'lr': cfg["lr"] / 10}]
     if other_params:
         param_groups.append({'params': other_params, 'lr': cfg["lr"]})
-    return torch.optim.AdamW(param_groups, weight_decay=cfg["weight_decay"])
+    return torch.optim.Adam(param_groups)
 
 
 def maybe_build_scheduler(optimizer, cfg):
@@ -422,7 +287,7 @@ def train(model, train_loader, val_loader, device, cfg):
     os.makedirs(cfg["results_dir"], exist_ok=True)
     os.makedirs(cfg["checkpoint_dir"], exist_ok=True)
 
-    criterion = build_criterion(cfg)
+    criterion = nn.BCELoss()
     optimizer = build_optimizer(model, cfg, backbone_frozen=True)
     scheduler = maybe_build_scheduler(optimizer, cfg)
 
@@ -498,18 +363,13 @@ def train(model, train_loader, val_loader, device, cfg):
               f"Val err: {val_err[epoch]:.4f}, loss: {val_loss[epoch]:.4f}, F1: {val_f1[epoch]:.4f} | "
               f"LR: {current_lr:.2e}")
 
-        # CHECKPOINTING: keyed on val F1, not val_err. F1 is your actual
-        # target metric -- val_err is still tracked/logged for reference/
-        # diagnostics only, and does not decide which epoch gets saved.
+        # CHECKPOINTING
         if val_f1[epoch] > best_val_f1:
             best_val_f1 = val_f1[epoch]
             best_epoch = epoch + 1
             torch.save(model.state_dict(),
                        os.path.join(cfg["checkpoint_dir"], f'{cfg["run_name"]}_current_best.pt'))
 
-        # val_err/val_loss are still tracked as diagnostics (e.g. to
-        # sanity-check the model isn't collapsing to all-negative), just not
-        # used for checkpointing.
         if val_err[epoch] < best_val_err:
             best_val_err = val_err[epoch]
 
@@ -607,17 +467,11 @@ def run_training(cfg=CONFIG):
     print(f"  Total parameters: {total_params}")
     print(f"  Trainable parameters: {trainable_params} ({trainable_params/total_params*100:.1f}%)")
 
-    # explicit confirmation so it's always visible in the console output
-    # which freeze mode a run actually used -- prevents silently getting a
-    # partially-unfrozen backbone when you meant to reproduce a frozen baseline
     if cfg["freeze_backbone_entirely"]:
         print(f"  Backbone: FROZEN for all {cfg['num_epochs']} epochs (freeze_backbone_entirely=True)")
     else:
         print(f"  Backbone: frozen until epoch {cfg['unfreeze_epoch'] + 1}, then unfrozen")
 
-    # gentle nudge, not a hard stop -- catches the specific mistake of running
-    # the ResNet-50 baseline with the backbone unfreezing partway through,
-    # which would NOT match your originally reported baseline numbers
     if cfg["model_name"] == "baseline" and not cfg["freeze_backbone_entirely"]:
         print("  [WARNING] model_name='baseline' but freeze_backbone_entirely=False -- "
               "this will NOT reproduce your original reported baseline (which was "
